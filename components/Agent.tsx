@@ -117,6 +117,14 @@ const Agent = ({
   const handleCall = async () => {
     setCallStatus(CallStatus.CONNECTING);
 
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (error) {
+      console.error("Microphone permission denied:", error);
+      setCallStatus(CallStatus.INACTIVE);
+      return;
+    }
+
     if (type === "generate") {
       await vapi.start(process.env.NEXT_PUBLIC_VAPI_WORKFLOW_ID!, {
         variableValues: {
