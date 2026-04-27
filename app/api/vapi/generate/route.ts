@@ -5,7 +5,18 @@ import { db } from "@/firebase/admin";
 import { getRandomInterviewCover } from "@/lib/utils";
 
 export async function POST(request: Request) {
-  const { type, role, level, techstack, amount, userid } = await request.json();
+  const body = await request.json();
+
+  let args = body;
+  let toolCallId = "";
+
+  if (body.message?.type === "tool-calls") {
+    const toolCall = body.message.toolWithToolCallList[0].toolCall;
+    args = toolCall.function.arguments;
+    toolCallId = toolCall.id;
+  }
+
+  const { type, role, level, techstack, amount, userid } = args;
 
   try {
     const { text: questions } = await generateText({
@@ -38,6 +49,21 @@ export async function POST(request: Request) {
     };
 
     await db.collection("interviews").add(interview);
+
+    if (toolCallId) {
+      return Response.json(
+        {
+          results: [
+            {
+              toolCallId: toolCallId,
+              result:
+                "Interview created successfully. Please say goodbye to the user and politely end the call now.",
+            },
+          ],
+        },
+        { status: 200 }
+      );
+    }
 
     return Response.json({ success: true }, { status: 200 });
   } catch (error) {
