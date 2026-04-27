@@ -36,10 +36,24 @@ type VapiErrorEvent = {
 
 const getVapiErrorMessage = (error: unknown) => {
   const errorEvent = error as VapiErrorEvent;
-  const message =
-    error instanceof Error
-      ? error.message
-      : errorEvent?.error?.message || errorEvent?.message || "";
+  
+  let message = "";
+  if (error instanceof Error) {
+    message = error.message;
+  } else if (typeof errorEvent?.error?.message === "string") {
+    message = errorEvent.error.message;
+  } else if (typeof errorEvent?.message === "string") {
+    message = errorEvent.message;
+  } else if (typeof error === "string") {
+    message = error;
+  } else {
+    try {
+      message = JSON.stringify(error);
+    } catch {
+      message = "Unknown error";
+    }
+  }
+
   const lowerMessage = message.toLowerCase();
 
   if (
@@ -69,7 +83,7 @@ const getVapiErrorMessage = (error: unknown) => {
     return "Vapi could not start the call. Check the Vapi public key and assistant/workflow ID in your deployment environment.";
   }
 
-  return message || "The call failed. Please check your microphone and try again.";
+  return "The call failed. Please check your microphone and try again.";
 };
 
 const isProbablyWorkflowId = (id: string) => {
@@ -253,6 +267,8 @@ const Agent = ({
     hasShownEmptyTranscriptWarningRef.current = false;
 
     try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+      
       if (!userId) {
         throw new Error("You need to be signed in to start an interview.");
       }
