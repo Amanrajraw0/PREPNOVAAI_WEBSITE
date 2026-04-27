@@ -1,5 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
+import { redirect } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import InterviewCard from "@/components/InterviewCard";
@@ -9,14 +10,14 @@ import {
   getInterviewsByUserId,
   getLatestInterviews,
 } from "@/lib/actions/general.action";
-import { dummyInterviews } from "@/constants";
 
 async function Home() {
   const user = await getCurrentUser();
+  if (!user) redirect("/sign-in");
 
   const [userInterviews, allInterview] = await Promise.all([
-    getInterviewsByUserId(user?.id || ""),
-    getLatestInterviews({ userId: user?.id || "" }),
+    getInterviewsByUserId(user.id),
+    getLatestInterviews({ userId: user.id }),
   ]);
 
   const hasPastInterviews = (userInterviews?.length || 0) > 0;
@@ -53,12 +54,13 @@ async function Home() {
             userInterviews?.map((interview) => (
               <InterviewCard
                 key={interview.id}
-                userId={user?.id}
+                userId={user.id}
                 interviewId={interview.id}
                 role={interview.role}
                 type={interview.type}
                 techstack={interview.techstack}
                 createdAt={interview.createdAt}
+                coverImage={interview.coverImage}
               />
             ))
           ) : (
@@ -75,26 +77,17 @@ async function Home() {
             allInterview?.map((interview) => (
               <InterviewCard
                 key={interview.id}
-                userId={user?.id}
+                userId={user.id}
                 interviewId={interview.id}
                 role={interview.role}
                 type={interview.type}
                 techstack={interview.techstack}
                 createdAt={interview.createdAt}
+                coverImage={interview.coverImage}
               />
             ))
           ) : (
-            dummyInterviews.map((interview) => (
-              <InterviewCard
-                key={interview.id}
-                userId={user?.id}
-                interviewId={interview.id}
-                role={interview.role}
-                type={interview.type}
-                techstack={interview.techstack}
-                createdAt={interview.createdAt}
-              />
-            ))
+            <p>No shared interviews are available yet. Create one to get started.</p>
           )}
         </div>
       </section>

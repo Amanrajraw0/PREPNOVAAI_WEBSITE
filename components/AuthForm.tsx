@@ -28,6 +28,33 @@ const authFormSchema = (type: FormType) => {
   });
 };
 
+const getAuthErrorMessage = (error: unknown) => {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String(error.code)
+      : "";
+
+  if (code.includes("auth/email-already-in-use")) {
+    return "That email is already registered. Please sign in instead.";
+  }
+
+  if (
+    code.includes("auth/invalid-credential") ||
+    code.includes("auth/wrong-password") ||
+    code.includes("auth/user-not-found")
+  ) {
+    return "Invalid email or password.";
+  }
+
+  if (code.includes("auth/network-request-failed")) {
+    return "Network error. Please check your connection and try again.";
+  }
+
+  return error instanceof Error
+    ? error.message
+    : "Something went wrong. Please try again.";
+};
+
 const AuthForm = ({ type }: { type: FormType }) => {
   const router = useRouter();
 
@@ -81,17 +108,23 @@ const AuthForm = ({ type }: { type: FormType }) => {
           return;
         }
 
-        await signIn({
+        const result = await signIn({
           email,
           idToken,
         });
 
+        if (!result?.success) {
+          toast.error(result?.message || "Sign in failed. Please try again.");
+          return;
+        }
+
         toast.success("Signed in successfully.");
         router.push("/");
+        router.refresh();
       }
     } catch (error) {
       console.log(error);
-      toast.error(`There was an error: ${error}`);
+      toast.error(getAuthErrorMessage(error));
     }
   };
 
@@ -138,8 +171,16 @@ const AuthForm = ({ type }: { type: FormType }) => {
               type="password"
             />
 
-            <Button className="btn" type="submit">
-              {isSignIn ? "Sign In" : "Create an Account"}
+            <Button
+              className="btn"
+              type="submit"
+              disabled={form.formState.isSubmitting}
+            >
+              {form.formState.isSubmitting
+                ? "Please wait..."
+                : isSignIn
+                  ? "Sign In"
+                  : "Create an Account"}
             </Button>
           </form>
         </Form>

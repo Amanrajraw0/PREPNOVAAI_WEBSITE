@@ -10,6 +10,14 @@ export async function createFeedback(params: CreateFeedbackParams) {
   const { interviewId, userId, transcript, feedbackId } = params;
 
   try {
+    if (!interviewId || !userId) {
+      return { success: false, message: "Missing interview or user details." };
+    }
+
+    if (!transcript.length) {
+      return { success: false, message: "No interview transcript was captured." };
+    }
+
     const formattedTranscript = transcript
       .map(
         (sentence: { role: string; content: string }) =>
@@ -30,9 +38,9 @@ export async function createFeedback(params: CreateFeedbackParams) {
         Please score the candidate from 0 to 100 in the following areas. Do not add categories other than the ones provided:
         - **Communication Skills**: Clarity, articulation, structured responses.
         - **Technical Knowledge**: Understanding of key concepts for the role.
-        - **Problem-Solving**: Ability to analyze problems and propose solutions.
-        - **Cultural & Role Fit**: Alignment with company values and job role.
-        - **Confidence & Clarity**: Confidence in responses, engagement, and clarity.
+        - **Problem Solving**: Ability to analyze problems and propose solutions.
+        - **Cultural Fit**: Alignment with company values and job role.
+        - **Confidence and Clarity**: Confidence in responses, engagement, and clarity.
         `,
       system:
         "You are a professional interviewer analyzing a mock interview. Your task is to evaluate the candidate based on structured categories",
@@ -62,14 +70,21 @@ export async function createFeedback(params: CreateFeedbackParams) {
     return { success: true, feedbackId: feedbackRef.id };
   } catch (error) {
     console.error("Error saving feedback:", error);
-    return { success: false };
+    return { success: false, message: "Failed to save feedback." };
   }
 }
 
 export async function getInterviewById(id: string): Promise<Interview | null> {
-  const interview = await db.collection("interviews").doc(id).get();
+  try {
+    const interview = await db.collection("interviews").doc(id).get();
 
-  return interview.data() as Interview | null;
+    if (!interview.exists) return null;
+
+    return { id: interview.id, ...interview.data() } as Interview;
+  } catch (error) {
+    console.error("Error getting interview:", error);
+    return null;
+  }
 }
 
 export async function getFeedbackByInterviewId(
@@ -77,17 +92,24 @@ export async function getFeedbackByInterviewId(
 ): Promise<Feedback | null> {
   const { interviewId, userId } = params;
 
-  const querySnapshot = await db
-    .collection("feedback")
-    .where("interviewId", "==", interviewId)
-    .where("userId", "==", userId)
-    .limit(1)
-    .get();
+  try {
+    if (!interviewId || !userId) return null;
 
-  if (querySnapshot.empty) return null;
+    const querySnapshot = await db
+      .collection("feedback")
+      .where("interviewId", "==", interviewId)
+      .where("userId", "==", userId)
+      .limit(1)
+      .get();
 
-  const feedbackDoc = querySnapshot.docs[0];
-  return { id: feedbackDoc.id, ...feedbackDoc.data() } as Feedback;
+    if (querySnapshot.empty) return null;
+
+    const feedbackDoc = querySnapshot.docs[0];
+    return { id: feedbackDoc.id, ...feedbackDoc.data() } as Feedback;
+  } catch (error) {
+    console.error("Error getting feedback:", error);
+    return null;
+  }
 }
 
 export async function getLatestInterviews(
@@ -95,31 +117,50 @@ export async function getLatestInterviews(
 ): Promise<Interview[] | null> {
   const { userId, limit = 20 } = params;
 
-  const interviews = await db
-    .collection("interviews")
-    .orderBy("createdAt", "desc")
-    .where("finalized", "==", true)
-    .where("userId", "!=", userId)
-    .limit(limit)
-    .get();
+  try {
+    const interviews = await db
+      .collection("interviews")
+      .orderBy("createdAt", "desc")
+      .limit(limit * 4)
+      .get();
 
-  return interviews.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  })) as Interview[];
+    const interviewList = interviews.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    })) as Interview[];
+
+    return interviewList
+      .filter((interview) => interview.finalized && interview.userId !== userId)
+      .slice(0, limit);
+  } catch (error) {
+    console.error("Error getting latest interviews:", error);
+    return [];
+  }
 }
 
 export async function getInterviewsByUserId(
   userId: string
 ): Promise<Interview[] | null> {
-  const interviews = await db
-    .collection("interviews")
-    .where("userId", "==", userId)
-    .orderBy("createdAt", "desc")
-    .get();
+  try {
+    if (!userId) return [];
 
-  return interviews.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  })) as Interview[];
+    const interviews = await db
+      .collection("interviews")
+      .where("userId", "==", userId)
+      .get();
+
+    const interviewList = interviews.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    })) as Interview[];
+
+    return interviewList.sort((a, b) => {
+      const dateA = new Date(a.createdAt || 0).getTime();
+      const dateB = new Date(b.createdAt || 0).getTime();
+      return dateB - dateA;
+    });
+  } catch (error) {
+    console.error("Error getting user interviews:", error);
+    return [];
+  }
 }

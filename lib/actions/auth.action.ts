@@ -79,6 +79,11 @@ export async function signIn(params: SignInParams) {
       };
 
     await setSessionCookie(idToken);
+
+    return {
+      success: true,
+      message: "Signed in successfully.",
+    };
   } catch (error) {
     console.error("Error signing in:", error);
 
@@ -94,6 +99,11 @@ export async function signOut() {
   const cookieStore = await cookies();
 
   cookieStore.delete("session");
+
+  return {
+    success: true,
+    message: "Signed out successfully.",
+  };
 }
 
 // Get current user from session cookie

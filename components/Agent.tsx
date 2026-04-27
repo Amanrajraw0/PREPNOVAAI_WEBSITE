@@ -1,8 +1,9 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { vapi } from "@/lib/vapi.sdk";
@@ -34,6 +35,9 @@ const Agent = ({
   const [messages, setMessages] = useState<SavedMessage[]>([]);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [lastMessage, setLastMessage] = useState<string>("");
+  const isGeneratingFeedbackRef = useRef(false);
+  const hasRedirectedAfterGenerateRef = useRef(false);
+  const hasShownEmptyTranscriptWarningRef = useRef(false);
 
   useEffect(() => {
     const onCallStart = () => {
@@ -62,7 +66,10 @@ const Agent = ({
     };
 
     const onError = (error: Error) => {
-      console.log("Error:", error);
+      console.error("Vapi error:", error);
+      toast.error("The call failed. Please check your microphone and try again.");
+      setCallStatus(CallStatus.INACTIVE);
+      setIsSpeaking(false);
     };
 
     vapi.on("call-start", onCallStart);
@@ -88,9 +95,7 @@ const Agent = ({
     }
 
     const handleGenerateFeedback = async (messages: SavedMessage[]) => {
-      console.log("handleGenerateFeedback");
-
-      const { success, feedbackId: id } = await createFeedback({
+      const { success, feedbackId: id, message } = await createFeedback({
         interviewId: interviewId!,
         userId: userId!,
         transcript: messages,
@@ -100,57 +105,120 @@ const Agent = ({
       if (success && id) {
         router.push(`/interview/${interviewId}/feedback`);
       } else {
-        console.log("Error saving feedback");
-        router.push("/");
+        toast.error(message || "Error saving feedback.");
+        isGeneratingFeedbackRef.current = false;
       }
     };
 
     if (callStatus === CallStatus.FINISHED) {
       if (type === "generate") {
+        if (hasRedirectedAfterGenerateRef.current) return;
+        hasRedirectedAfterGenerateRef.current = true;
         router.push("/");
-      } else {
+        router.refresh();
+        return;
+      }
+
+      if (!messages.length) {
+        if (!hasShownEmptyTranscriptWarningRef.current) {
+          toast.error("No transcript was captured. Please retake the interview.");
+          hasShownEmptyTranscriptWarningRef.current = true;
+        }
+        return;
+      }
+
+      if (!interviewId || !userId) {
+        toast.error("Missing interview details. Please try again.");
+        return;
+      }
+
+      if (!isGeneratingFeedbackRef.current) {
+        isGeneratingFeedbackRef.current = true;
         handleGenerateFeedback(messages);
       }
     }
   }, [messages, callStatus, feedbackId, interviewId, router, type, userId]);
 
-  const handleCall = async () => {
-    setCallStatus(CallStatus.CONNECTING);
+  const requestMicrophoneAccess = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) return true;
 
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      return true;
     } catch (error) {
       console.error("Microphone permission denied:", error);
-      setCallStatus(CallStatus.INACTIVE);
-      return;
+      toast.error("Microphone access is required to start the interview.");
+      return false;
     }
+  };
 
-    if (type === "generate") {
-      await vapi.start(process.env.NEXT_PUBLIC_VAPI_WORKFLOW_ID!, {
-        variableValues: {
-          username: userName,
-          userid: userId,
-        },
-      });
-    } else {
-      let formattedQuestions = "";
-      if (questions) {
-        formattedQuestions = questions
-          .map((question) => `- ${question}`)
-          .join("\n");
+  const handleCall = async () => {
+    setCallStatus(CallStatus.CONNECTING);
+    setMessages([]);
+    setLastMessage("");
+    isGeneratingFeedbackRef.current = false;
+    hasRedirectedAfterGenerateRef.current = false;
+    hasShownEmptyTranscriptWarningRef.current = false;
+
+    try {
+      if (!userId) {
+        throw new Error("You need to be signed in to start an interview.");
       }
 
-      await vapi.start(interviewer, {
-        variableValues: {
-          questions: formattedQuestions,
-        },
-      });
+      const hasMicrophoneAccess = await requestMicrophoneAccess();
+      if (!hasMicrophoneAccess) {
+        setCallStatus(CallStatus.INACTIVE);
+        return;
+      }
+
+      if (type === "generate") {
+        const assistantId = process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID;
+        if (!assistantId) {
+          throw new Error("Missing NEXT_PUBLIC_VAPI_ASSISTANT_ID.");
+        }
+
+        await vapi.start(assistantId, {
+          variableValues: {
+            username: userName,
+            userid: userId,
+          },
+        });
+      } else {
+        if (!questions?.length) {
+          throw new Error("No interview questions were found.");
+        }
+
+        const formattedQuestions = questions
+          .map((question) => `- ${question}`)
+          .join("\n");
+
+        await vapi.start(interviewer, {
+          variableValues: {
+            questions: formattedQuestions,
+          },
+        });
+      }
+    } catch (error) {
+      console.error("Error starting call:", error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to start the call. Please try again."
+      );
+      setCallStatus(CallStatus.INACTIVE);
     }
   };
 
   const handleDisconnect = () => {
-    setCallStatus(CallStatus.FINISHED);
-    vapi.stop();
+    try {
+      vapi.stop();
+    } catch (error) {
+      console.error("Error ending call:", error);
+    } finally {
+      setCallStatus(CallStatus.FINISHED);
+      setIsSpeaking(false);
+    }
   };
 
   return (

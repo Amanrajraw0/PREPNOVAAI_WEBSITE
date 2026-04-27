@@ -22,6 +22,8 @@ const Feedback = async ({ params }: RouteParams) => {
     userId: user?.id || "",
   });
 
+  if (!feedback) redirect(`/interview/${id}`);
+
   return (
     <section className="section-feedback">
       <div className="flex flex-row justify-center">
@@ -93,7 +95,7 @@ const Feedback = async ({ params }: RouteParams) => {
       </div>
 
       <div className="buttons">
-        <Button className="btn-secondary flex-1">
+        <Button asChild className="btn-secondary flex-1">
           <Link href="/" className="flex w-full justify-center">
             <p className="text-sm font-semibold text-primary-200 text-center">
               Back to dashboard
@@ -101,7 +103,7 @@ const Feedback = async ({ params }: RouteParams) => {
           </Link>
         </Button>
 
-        <Button className="btn-primary flex-1">
+        <Button asChild className="btn-primary flex-1">
           <Link
             href={`/interview/${id}`}
             className="flex w-full justify-center"
