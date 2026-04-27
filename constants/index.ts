@@ -97,15 +97,19 @@ export const mappings = {
   "aws amplify": "amplify",
 };
 
+export const interviewTranscriber = {
+  provider: "deepgram",
+  model: "nova-3",
+  language: "en-IN",
+  smartFormat: true,
+  endpointing: 300,
+} as const;
+
 export const interviewer: CreateAssistantDTO = {
   name: "Interviewer",
   firstMessage:
     "Hello! Thank you for taking the time to speak with me today. I'm excited to learn more about you and your experience.",
-  transcriber: {
-    provider: "deepgram",
-    model: "nova-2",
-    language: "en",
-  },
+  transcriber: interviewTranscriber,
   voice: {
     provider: "11labs",
     voiceId: "sarah",

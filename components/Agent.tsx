@@ -7,7 +7,7 @@ import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { vapi } from "@/lib/vapi.sdk";
-import { interviewer } from "@/constants";
+import { interviewer, interviewTranscriber } from "@/constants";
 import { createFeedback } from "@/lib/actions/general.action";
 
 enum CallStatus {
@@ -21,6 +21,61 @@ interface SavedMessage {
   role: "user" | "system" | "assistant";
   content: string;
 }
+
+type VapiErrorEvent = {
+  type?: string;
+  stage?: string;
+  error?: {
+    message?: string;
+    code?: string;
+    status?: number;
+  };
+  message?: string;
+  context?: Record<string, unknown>;
+};
+
+const getVapiErrorMessage = (error: unknown) => {
+  const errorEvent = error as VapiErrorEvent;
+  const message =
+    error instanceof Error
+      ? error.message
+      : errorEvent?.error?.message || errorEvent?.message || "";
+  const lowerMessage = message.toLowerCase();
+
+  if (
+    lowerMessage.includes("permission") ||
+    lowerMessage.includes("notallowed") ||
+    lowerMessage.includes("not allowed")
+  ) {
+    return "Microphone permission is blocked. Allow microphone access in your browser and try again.";
+  }
+
+  if (
+    lowerMessage.includes("notfound") ||
+    lowerMessage.includes("not found") ||
+    lowerMessage.includes("device")
+  ) {
+    return "No working microphone was found. Check your input device and try again.";
+  }
+
+  if (
+    lowerMessage.includes("assistant") ||
+    lowerMessage.includes("workflow") ||
+    lowerMessage.includes("unauthorized") ||
+    lowerMessage.includes("401") ||
+    lowerMessage.includes("403") ||
+    lowerMessage.includes("404")
+  ) {
+    return "Vapi could not start the call. Check the Vapi public key and assistant/workflow ID in your deployment environment.";
+  }
+
+  return message || "The call failed. Please check your microphone and try again.";
+};
+
+const isProbablyWorkflowId = (id: string) => {
+  const normalizedId = id.toLowerCase();
+  return normalizedId.startsWith("workflow") || normalizedId.startsWith("wf_");
+};
 
 const Agent = ({
   userName,
@@ -65,9 +120,16 @@ const Agent = ({
       setIsSpeaking(false);
     };
 
-    const onError = (error: Error) => {
+    const onError = (error: unknown) => {
       console.error("Vapi error:", error);
-      toast.error("The call failed. Please check your microphone and try again.");
+      toast.error(getVapiErrorMessage(error));
+      setCallStatus(CallStatus.INACTIVE);
+      setIsSpeaking(false);
+    };
+
+    const onCallStartFailed = (event: { error?: string }) => {
+      console.error("Vapi call start failed:", event);
+      toast.error(getVapiErrorMessage(event.error || event));
       setCallStatus(CallStatus.INACTIVE);
       setIsSpeaking(false);
     };
@@ -78,6 +140,7 @@ const Agent = ({
     vapi.on("speech-start", onSpeechStart);
     vapi.on("speech-end", onSpeechEnd);
     vapi.on("error", onError);
+    vapi.on("call-start-failed", onCallStartFailed);
 
     return () => {
       vapi.off("call-start", onCallStart);
@@ -86,6 +149,7 @@ const Agent = ({
       vapi.off("speech-start", onSpeechStart);
       vapi.off("speech-end", onSpeechEnd);
       vapi.off("error", onError);
+      vapi.off("call-start-failed", onCallStartFailed);
     };
   }, []);
 
@@ -139,18 +203,45 @@ const Agent = ({
     }
   }, [messages, callStatus, feedbackId, interviewId, router, type, userId]);
 
-  const requestMicrophoneAccess = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) return true;
+  const startGenerateCall = async () => {
+    const variableValues = {
+      username: userName,
+      userid: userId,
+    };
+    const workflowId = process.env.NEXT_PUBLIC_VAPI_WORKFLOW_ID;
+    const assistantId = process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID;
+    const assistantOverrides = {
+      variableValues,
+      transcriber: interviewTranscriber,
+    };
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
-      return true;
-    } catch (error) {
-      console.error("Microphone permission denied:", error);
-      toast.error("Microphone access is required to start the interview.");
-      return false;
+    if (workflowId) {
+      return vapi.start(
+        undefined,
+        undefined,
+        undefined,
+        workflowId,
+        { variableValues }
+      );
     }
+
+    if (assistantId && isProbablyWorkflowId(assistantId)) {
+      return vapi.start(
+        undefined,
+        undefined,
+        undefined,
+        assistantId,
+        { variableValues }
+      );
+    }
+
+    if (assistantId) {
+      return vapi.start(assistantId, assistantOverrides);
+    }
+
+    throw new Error(
+      "Missing NEXT_PUBLIC_VAPI_WORKFLOW_ID or NEXT_PUBLIC_VAPI_ASSISTANT_ID."
+    );
   };
 
   const handleCall = async () => {
@@ -166,24 +257,17 @@ const Agent = ({
         throw new Error("You need to be signed in to start an interview.");
       }
 
-      const hasMicrophoneAccess = await requestMicrophoneAccess();
-      if (!hasMicrophoneAccess) {
-        setCallStatus(CallStatus.INACTIVE);
-        return;
+      if (!process.env.NEXT_PUBLIC_VAPI_WEB_TOKEN) {
+        throw new Error("Missing NEXT_PUBLIC_VAPI_WEB_TOKEN.");
       }
 
       if (type === "generate") {
-        const assistantId = process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID;
-        if (!assistantId) {
-          throw new Error("Missing NEXT_PUBLIC_VAPI_ASSISTANT_ID.");
+        const call = await startGenerateCall();
+        if (!call) {
+          throw new Error(
+            "Vapi could not start the interview generation call. Check your Vapi workflow or assistant ID."
+          );
         }
-
-        await vapi.start(assistantId, {
-          variableValues: {
-            username: userName,
-            userid: userId,
-          },
-        });
       } else {
         if (!questions?.length) {
           throw new Error("No interview questions were found.");
@@ -193,19 +277,20 @@ const Agent = ({
           .map((question) => `- ${question}`)
           .join("\n");
 
-        await vapi.start(interviewer, {
+        const call = await vapi.start(interviewer, {
           variableValues: {
             questions: formattedQuestions,
           },
+          transcriber: interviewTranscriber,
         });
+
+        if (!call) {
+          throw new Error("Vapi could not start the interview call.");
+        }
       }
     } catch (error) {
       console.error("Error starting call:", error);
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Unable to start the call. Please try again."
-      );
+      toast.error(getVapiErrorMessage(error));
       setCallStatus(CallStatus.INACTIVE);
     }
   };
@@ -272,7 +357,11 @@ const Agent = ({
 
       <div className="w-full flex justify-center">
         {callStatus !== "ACTIVE" ? (
-          <button className="relative btn-call" onClick={() => handleCall()}>
+          <button
+            className="relative btn-call disabled:opacity-70 disabled:cursor-not-allowed"
+            onClick={() => handleCall()}
+            disabled={callStatus === CallStatus.CONNECTING}
+          >
             <span
               className={cn(
                 "absolute animate-ping rounded-full opacity-75",
